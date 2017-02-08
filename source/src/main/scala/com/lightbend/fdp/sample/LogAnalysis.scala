@@ -48,12 +48,12 @@ object LogAnalysis {
       StructField("payloadSize", LongType, false)))
 
     /** Tracks the total query count and number of aggregate bytes for a particular group. */
-    class Stats(val count: Int, val numBytes: Int) extends Serializable {
-      def merge(other: Stats): Stats = new Stats(count + other.count, numBytes + other.numBytes)
+    case class Stats(val count: Int, val numBytes: Int) extends Serializable {
+      def +(other: Stats): Stats = new Stats(count + other.count, numBytes + other.numBytes)
       override def toString: String = "bytes=%s\tn=%s".format(numBytes, count)
     }
 
-    def extractKey(line: String): (String, String, String) = {
+    def extractKey(line: String): Option[(String,String,String)] = {
       logRegex.findFirstIn(line) match {
         case Some(logRegex(ip, _, user, _, method, endpoint, protocol, _, _)) =>
           if (user != "\"-\"") (ip, user, method ++ endpoint ++ protocol)

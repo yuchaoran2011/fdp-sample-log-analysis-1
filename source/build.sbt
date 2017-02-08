@@ -1,6 +1,6 @@
-name := "fdp-sample-loganalysis"
+name := "fdp-sample-log-analysis"
 
-organization := "lightbend"
+organization := "Lightbend"
 
 version := "0.1"
 
