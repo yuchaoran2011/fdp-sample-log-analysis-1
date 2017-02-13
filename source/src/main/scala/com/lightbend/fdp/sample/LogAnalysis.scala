@@ -36,7 +36,7 @@ object LogAnalysis {
     val month_map = Map("Jan" -> 1, "Feb" -> 2, "Mar" -> 3, "Apr" -> 4, "May" -> 5, "Jun" -> 6, "Jul" ->7,
       "Aug" -> 8,  "Sep" -> 9, "Oct" -> 10, "Nov" -> 11, "Dec" -> 12)
 
-    val schema: StructType = new StructType(Array(
+    val schema = new StructType(Array(
       StructField("ip", StringType, false),
       StructField("clientId", StringType, false),
       StructField("user", StringType, false),
@@ -48,7 +48,7 @@ object LogAnalysis {
       StructField("payloadSize", LongType, false)))
 
     /** Tracks the total query count and number of aggregate bytes for a particular group. */
-    case class Stats(val count: Int, val numBytes: Int) extends Serializable {
+    case class Stats(count: Int, numBytes: Int) extends Serializable {
       def +(other: Stats): Stats = new Stats(count + other.count, numBytes + other.numBytes)
       override def toString: String = "bytes=%s\tn=%s".format(numBytes, count)
     }
