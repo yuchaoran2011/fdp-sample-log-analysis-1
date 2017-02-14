@@ -56,9 +56,9 @@ object LogAnalysis {
     def extractKey(line: String): Option[(String,String,String)] = {
       logRegex.findFirstIn(line) match {
         case Some(logRegex(ip, _, user, _, method, endpoint, protocol, _, _)) =>
-          if (user != "\"-\"") (ip, user, method ++ endpoint ++ protocol)
-          else (null, null, null)
-        case _ => (null, null, null)
+          if (user != "\"-\"") Some(ip, user, method ++ endpoint ++ protocol)
+          else Option(null, null, null)
+        case _ => Option(null, null, null)
       }
     }
 
