@@ -1,9 +1,8 @@
 package com.lightbend.fdp.sample
 
 import org.apache.spark.rdd.RDD
-import org.apache.spark.sql.{Row, SparkSession}
-import org.apache.spark.sql.types.{LongType, StringType, StructField, StructType}
 import org.apache.spark.{SparkConf, SparkContext}
+import org.apache.spark.sql.SQLContext
 import org.joda.time.DateTime
 
 /*
@@ -19,15 +18,16 @@ object LogAnalysis {
       | HTTP/1.1" 304 306""".stripMargin.lines.mkString
   )
 
+  case class LogFields(ip: String, clientId: String, user: String, dataTime: String, method: String,
+                       endpoint: String, protocol: String, status: String, payloadSize: Long)
+
   def main(args: Array[String]) {
 
     val appName = "Apache Log Analysis"
     val sparkConf = new SparkConf().setAppName(appName)
     val sc = new SparkContext(sparkConf)
-    val spark = SparkSession.builder()
-      .master("local")
-      .appName(appName)
-      .getOrCreate()
+    val sqlContext = new org.apache.spark.sql.SQLContext(sc)
+    import sqlContext.implicits._
 
     val dataSet = if (args.length == 1) sc.textFile(args(0)) else sc.parallelize(exampleApacheLogs)
 
@@ -36,19 +36,8 @@ object LogAnalysis {
     val month_map = Map("Jan" -> 1, "Feb" -> 2, "Mar" -> 3, "Apr" -> 4, "May" -> 5, "Jun" -> 6, "Jul" ->7,
       "Aug" -> 8,  "Sep" -> 9, "Oct" -> 10, "Nov" -> 11, "Dec" -> 12)
 
-    val schema: StructType = new StructType(Array(
-      StructField("ip", StringType, false),
-      StructField("clientId", StringType, false),
-      StructField("user", StringType, false),
-      StructField("dateTime", StringType, false),
-      StructField("method", StringType, false),
-      StructField("endpoint", StringType, false),
-      StructField("protocol", StringType, false),
-      StructField("status", StringType, false),
-      StructField("payloadSize", LongType, false)))
-
     /** Tracks the total query count and number of aggregate bytes for a particular group. */
-    case class Stats(val count: Int, val numBytes: Int) extends Serializable {
+    case class Stats(count: Int, numBytes: Int) extends Serializable {
       def +(other: Stats): Stats = new Stats(count + other.count, numBytes + other.numBytes)
       override def toString: String = "bytes=%s\tn=%s".format(numBytes, count)
     }
@@ -56,9 +45,9 @@ object LogAnalysis {
     def extractKey(line: String): Option[(String,String,String)] = {
       logRegex.findFirstIn(line) match {
         case Some(logRegex(ip, _, user, _, method, endpoint, protocol, _, _)) =>
-          if (user != "\"-\"") (ip, user, method ++ endpoint ++ protocol)
-          else (null, null, null)
-        case _ => (null, null, null)
+          if (user != "\"-\"") Some(ip, user, method ++ endpoint ++ protocol)
+          else Option(null, null, null)
+        case _ => Option(null, null, null)
       }
     }
 
@@ -71,13 +60,13 @@ object LogAnalysis {
     }
 
     // Convert Apache time format into a Joda datetime object
-    def parseApacheTime(s: String): DateTime = {
-      new DateTime(s.substring(7, 11).toInt,
+    def parseApacheTime(s: String): String = {
+      (new DateTime(s.substring(7, 11).toInt,
         month_map(s.substring(3, 6)),
         s.substring(0, 2).toInt,
         s.substring(12, 14).toInt,
         s.substring(15, 17).toInt,
-        s.substring(18, 20).toInt)
+        s.substring(18, 20).toInt)).toString()
     }
 
     /* Parse a line in the Apache Common Log format
@@ -88,40 +77,35 @@ object LogAnalysis {
       logRegex.findFirstIn(line) match {
         case Some(logRegex(ip, clientId, user, dateTime, method, endpoint, protocol, status, bytes)) =>
           val size = if (bytes == "-") 0L else bytes.toLong
-          ((ip, clientId, user, dateTime, method, endpoint, protocol, status, size), 1)
+          (LogFields(ip, clientId, user, dateTime, method, endpoint, protocol, status, size), 1)
         case _ => (line, 0)
       }
     }
 
     def parseLogs() = {
-      val parsedLogs = dataSet.map(parseApacheLogLine).cache()
-      val accessLogs =
-        parsedLogs.filter(s => s._2 == 1).map(s => s._1).cache().asInstanceOf[RDD[(String, String, String, DateTime, String, String, String, String, Long)]]
+      val parsedLogs = dataSet.map(parseApacheLogLine)
+      val accessLogs = parsedLogs.filter(s => s._2 == 1).map(s => s._1).map(_.asInstanceOf[LogFields])
       val failedLogs = parsedLogs.filter(s => s._2 == 0).map(s => s._1)
       (parsedLogs, accessLogs, failedLogs)
     }
 
     val (_, accessLogs, _) = parseLogs()
-    val rowAccessLogs = accessLogs.map(elem => Row(elem._1, elem._2, elem._3, elem._4, elem._5, elem._6, elem._7, elem._8, elem._9))
-    val logDf = spark.createDataFrame(rowAccessLogs, schema)
+    accessLogs.toDF().registerTempTable("logs")
 
-    println("Payload size stats:")
-    logDf.describe("payloadSize").show()
-
-    val statusCodeToCount = accessLogs.map(log => (log._8, 1)).reduceByKey((a, b) => a + b).cache()
+    val statusCodeToCount = accessLogs.map(log => (log.status, 1)).reduceByKey((a, b) => a + b).cache()
     val statusCodeToCountList = statusCodeToCount.take(100)
 
     println("Response codes and their counts:")
     statusCodeToCountList.foreach(println)
 
-    val ipCounts = accessLogs.map(log => (log._1, 1)).reduceByKey((a, b) => a + b)
+    val ipCounts = accessLogs.map(log => (log.ip, 1)).reduceByKey((a, b) => a + b)
     val ipMoreThan10 = ipCounts.filter(x => x._2 > 10)
     val ipPick20 = ipMoreThan10.map(x => x._1).take(20)
     println("Any 20 hosts that have accessed more then 10 times:")
     ipPick20.foreach(println)
 
 
-    val endpointCounts = accessLogs.map(log => (log._6, 1)).reduceByKey((a, b) => a + b)
+    val endpointCounts = accessLogs.map(log => (log.endpoint, 1)).reduceByKey((a, b) => a + b)
     val top10points = endpointCounts.takeOrdered(10)(Ordering[Int].on(x => -1 * x._2))
     println("Top 10 endpoints:")
     top10points.foreach(println)
